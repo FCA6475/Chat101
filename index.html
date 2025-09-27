@@ -1,0 +1,1622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Relay Chat Hub</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load React and ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Load Babel for JSX compilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Custom styling for aesthetics and responsive layout -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            padding: 0;
+            overflow: hidden; /* Prevent body scrolling when app is full height */
+        }
+        #root {
+            height: 100vh;
+            width: 100vw;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="module">
+        // --- FIREBASE SDK IMPORTS (using module imports for modern Firebase) ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, query, where, onSnapshot, serverTimestamp, updateDoc, writeBatch, addDoc, deleteDoc, getDocs, setLogLevel } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+        import { v4 as uuidv4 } from 'https://jspm.dev/uuid';
+
+        // Set Firebase logging level (optional, but good for debugging)
+        setLogLevel('error');
+
+        // --- GLOBAL SETUP & CONFIGURATION ---
+
+        const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+        // ====================================================================
+        // !!! IMPORTANT: STANDALONE CONFIGURATION !!!
+        // You MUST replace the placeholder values below with your actual 
+        // Firebase project credentials when running this file outside of the 
+        // Canvas environment (e.g., on GitHub Pages or locally).
+        // ====================================================================
+        const STANDALONE_FIREBASE_CONFIG = {
+            apiKey: "YOUR_FIREBASE_API_KEY", // <-- REPLACE THIS
+            authDomain: "YOUR_PROJECT_ID.firebaseapp.com", // <-- REPLACE THIS
+            projectId: "YOUR-PROJECT-ID", // <-- REPLACE THIS
+            storageBucket: "YOUR-PROJECT-ID.appspot.com",
+            messagingSenderId: "SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+        const STANDALONE_APP_ID = 'github-relay-chat-hub'; 
+        // --------------------------------------------------------------------
+
+        // Determine configuration sources using typeof check
+        const isCanvasEnvironment = typeof __firebase_config !== 'undefined';
+
+        const firebaseConfig = isCanvasEnvironment 
+            ? JSON.parse(__firebase_config) 
+            : STANDALONE_FIREBASE_CONFIG;
+            
+        const initialAuthToken = isCanvasEnvironment 
+            ? typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null
+            : null;
+
+        const appId = isCanvasEnvironment 
+            ? typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'
+            : STANDALONE_APP_ID;
+
+        let app, db, auth;
+
+        // Global constants
+        const GLOBAL_ADMIN_ID = 'GLOBAL_ADMIN_ID';
+        const GROUP_CHAT_ID = 'GROUP'; 
+        const BANNED_USERS_DOC = 'artifacts/' + appId + '/public/data/security/banned_users';
+        const GLOBAL_NOTIFICATION_DOC = 'artifacts/' + appId + '/public/data/global_notification/message';
+        const PUBLIC_PROFILES_COLLECTION = 'artifacts/' + appId + '/public/data/all_profiles';
+
+        const getPrivateChatRoomId = (userId1, userId2) => userId1 < userId2 ? `${userId1}_${userId2}` : `${userId2}_${userId1}`;
+
+        // Download Utility 
+        const downloadJson = (data, filename) => {
+            try {
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                console.error("Download failed:", e);
+            }
+        };
+
+
+        // --- REACT COMPONENTS (Compiled by Babel) ---
+    </script>
+
+    <script type="text/babel">
+    
+        // --- CHAT COMPONENTS ---
+        const MessageInput = ({ onSend, currentChatType, accentColor, bgCardColor, borderColor, bgMainColor, textColor, activeChat }) => {
+            const [text, setText] = useState('');
+            // Use friendId (Firebase UID) to determine if private chat is active
+            const isDisabled = currentChatType === 'PRIVATE' && !activeChat.friendId;
+
+            const handleSubmit = (e) => {
+              e.preventDefault();
+              if (!text.trim() || isDisabled) return;
+              onSend(text, currentChatType === 'PRIVATE');
+              setText('');
+            };
+            
+            const inputStyle = { 
+                backgroundColor: bgMainColor, 
+                borderColor: borderColor, 
+                color: textColor,
+            };
+            
+            const buttonStyle = { backgroundColor: accentColor };
+
+            return (
+              <footer className="p-4 border-t" style={{ backgroundColor: bgCardColor, borderColor: borderColor }}>
+                <form onSubmit={handleSubmit} className="flex space-x-3">
+                  <input
+                    type="text"
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                    placeholder={isDisabled ? "Select a friend to start private chat..." : "Type a message..."}
+                    className="flex-grow p-3 border rounded-xl transition duration-150 focus:ring-2 focus:ring-opacity-50 focus:ring-blue-500"
+                    style={inputStyle}
+                    disabled={isDisabled}
+                  />
+                  <button
+                    type="submit"
+                    className="px-5 py-3 text-white font-semibold rounded-xl transition duration-200 disabled:opacity-50 hover:shadow-lg"
+                    style={buttonStyle}
+                    disabled={!text.trim() || isDisabled}
+                  >
+                    Send
+                  </button>
+                </form>
+              </footer>
+            );
+        }
+
+        const ChatContent = ({ messages, isPrivate, user, isDark, accentColor, bgMainColor, textSecondaryColor }) => {
+            const messagesEndRef = useRef(null);
+            const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); };
+            
+            useEffect(() => {
+                scrollToBottom();
+            }, [messages.length]);
+            
+            const myBubbleStyle = { backgroundColor: accentColor, color: 'white' };
+            const otherBubbleStyle = { 
+                backgroundColor: isDark ? '#374151' : '#e5e7eb', // bg-gray-700 / bg-gray-200
+                color: isDark ? '#f3f4f6' : '#1f2937' // text-gray-100 / text-gray-800
+            };
+            const timeAndNameColor = textSecondaryColor;
+            
+            const currentUserId = user ? user.relayId : null; // Use Relay ID for display context
+
+            const renderMessage = (msg) => {
+              const isMyMessage = msg.senderRelayId === currentUserId;
+              const alignment = isMyMessage ? 'justify-end' : 'justify-start';
+              
+              const { style, bubbleClass } = isMyMessage 
+                ? { style: myBubbleStyle, bubbleClass: 'text-right' } 
+                : { style: otherBubbleStyle, bubbleClass: 'text-left' };
+                
+              const timestampValue = msg.timestamp ? msg.timestamp.toMillis() : Date.now();
+              const timeString = msg.timestamp
+                ? new Date(timestampValue).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                : 'Sending...';
+                
+              const senderInfo = isPrivate 
+                ? (isMyMessage ? 'You' : msg.senderName)
+                : `${msg.senderName} (${msg.senderRole}${msg.team ? ` - ${msg.team}` : ''})`;
+
+
+              return (
+                <div key={msg.id} className={`flex ${alignment} mb-4 mx-2`}>
+                  <div className={`max-w-xs md:max-w-md ${bubbleClass}`}>
+                    <div className={`text-xs font-medium mb-1 flex ${isMyMessage ? 'flex-row-reverse' : 'flex-row'} items-baseline`} style={{ color: timeAndNameColor }}>
+                      <span>{senderInfo}</span>
+                    </div>
+                    
+                    <div className={`px-4 py-2 rounded-xl shadow-lg break-words`} style={style}>
+                      {msg.text} 
+                    </div>
+                    <div className={`text-xs mt-1`} style={{ color: timeAndNameColor }}>
+                      {timeString}
+                    </div>
+                  </div>
+                </div>
+              );
+            };
+
+            return (
+                <main className="flex-grow overflow-y-auto p-4 space-y-4" style={{ backgroundColor: bgMainColor }}>
+                    {messages.length === 0 ? (
+                        <div className="text-center mt-10" style={{ color: textSecondaryColor }}>
+                            {isPrivate ? 'Start your private conversation!' : 'Start the group conversation!'}
+                        </div>
+                    ) : (
+                        messages.map(renderMessage)
+                    )}
+                    <div ref={messagesEndRef} />
+                </main>
+            );
+        }
+        
+        // --- FRIENDS MANAGEMENT COMPONENT ---
+        const FriendsManager = ({ themeStyles, friendsList, pendingRequests, handleAcceptFriend, handleDeclineFriend, handleSendFriendRequest, setActiveChat }) => {
+            const { accentColor: ac, bgMain, bgCard, textPrimary, textSecondary, borderColor } = themeStyles;
+            const [targetRelayId, setTargetRelayId] = useState('');
+            const [requestStatus, setRequestStatus] = useState('');
+            
+            const acceptedFriends = friendsList.filter(f => f.status === 'ACCEPTED');
+            
+            const handleSendRequest = async (e) => {
+                e.preventDefault();
+                setRequestStatus('Sending request...');
+                const status = await handleSendFriendRequest(targetRelayId);
+                setRequestStatus(status);
+                if (status.startsWith('Success')) {
+                    setTargetRelayId('');
+                }
+            };
+            
+            const handleAction = async (request, action) => {
+                const handler = action === 'accept' ? handleAcceptFriend : handleDeclineFriend;
+                setRequestStatus(`Processing ${action}...`);
+                const status = await handler(request);
+                setRequestStatus(status);
+            };
+
+            return (
+                <div className="p-4 flex flex-col h-full overflow-y-auto" style={{ backgroundColor: bgMain, color: textPrimary }}>
+                    <h2 className="text-2xl font-bold mb-4 border-b pb-2" style={{ color: ac, borderColor: borderColor }}>Friends and Direct Message Manager</h2>
+
+                    {requestStatus && (
+                        <p className={`p-3 rounded-xl text-sm mb-4 font-medium ${requestStatus.startsWith('Error') || requestStatus.includes('Invalid') ? 'bg-red-200 text-red-800 border border-red-400' : 'bg-green-200 text-green-800 border border-green-400'}`}>
+                            {requestStatus}
+                        </p>
+                    )}
+
+                    {/* Send Friend Request Section */}
+                    <section className="p-4 rounded-xl shadow-lg mb-6" style={{ backgroundColor: bgCard, border: `1px solid ${borderColor}` }}>
+                        <h3 className="text-xl font-semibold mb-3" style={{ color: textPrimary }}>Send New Request</h3>
+                        <form onSubmit={handleSendRequest} className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-3">
+                            <input
+                                type="text"
+                                value={targetRelayId}
+                                onChange={(e) => setTargetRelayId(e.target.value.toUpperCase())}
+                                placeholder="Target's Relay ID (e.g., TEAMALPHA1)"
+                                className="flex-grow p-3 border rounded-lg uppercase"
+                                style={{ backgroundColor: bgMain, borderColor: borderColor, color: textPrimary }}
+                                required
+                                maxLength={15}
+                                minLength={5}
+                            />
+                            <button
+                                type="submit"
+                                className="px-5 py-3 text-white font-semibold rounded-lg transition disabled:opacity-50 hover:opacity-90"
+                                style={{ backgroundColor: ac }}
+                                disabled={!targetRelayId.trim() || targetRelayId.length < 5}
+                            >
+                                Send Request
+                            </button>
+                        </form>
+                    </section>
+                    
+                    {/* Pending Requests Section */}
+                    <section className="p-4 rounded-xl shadow-lg mb-6" style={{ backgroundColor: bgCard, border: `1px solid ${borderColor}` }}>
+                        <h3 className="text-xl font-semibold mb-3 border-b pb-2" style={{ color: textPrimary, borderColor: borderColor }}>
+                            Pending Requests ({pendingRequests.length})
+                        </h3>
+                        <div className="space-y-3">
+                            {pendingRequests.length === 0 ? (
+                                <p className="text-sm italic p-2" style={{ color: textSecondary }}>No new friend requests.</p>
+                            ) : (
+                                pendingRequests.map(req => (
+                                    <div key={req.senderId} className="flex flex-col sm:flex-row justify-between items-start sm:items-center p-3 rounded-xl border border-dashed" style={{ backgroundColor: bgMain, borderColor: borderColor }}>
+                                        <p className="font-medium mb-2 sm:mb-0">{req.senderName} <span className="text-xs" style={{ color: textSecondary }}>({req.senderRelayId})</span></p>
+                                        <div className="space-x-2">
+                                            <button
+                                                onClick={() => handleAction(req, 'accept')}
+                                                className="text-xs bg-green-500 text-white px-3 py-1 rounded-full hover:bg-green-600 transition"
+                                            >
+                                                Accept
+                                            </button>
+                                            <button
+                                                onClick={() => handleAction(req, 'decline')}
+                                                className="text-xs bg-red-500 text-white px-3 py-1 rounded-full hover:bg-red-600 transition"
+                                            >
+                                                Decline
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </section>
+                    
+                    {/* Accepted Friends Section */}
+                    <section className="p-4 rounded-xl shadow-lg flex-grow" style={{ backgroundColor: bgCard, border: `1px solid ${borderColor}` }}>
+                        <h3 className="text-xl font-semibold mb-3 border-b pb-2" style={{ color: textPrimary, borderColor: borderColor }}>
+                            Accepted Friends ({acceptedFriends.length})
+                        </h3>
+                        <div className="space-y-3">
+                            {acceptedFriends.length === 0 ? (
+                                <p className="text-sm italic p-2" style={{ color: textSecondary }}>You don't have any accepted friends yet. Send a request!</p>
+                            ) : (
+                                acceptedFriends.map(friend => (
+                                    <div key={friend.userId} className="flex justify-between items-center p-3 rounded-xl border" style={{ backgroundColor: bgMain, borderColor: borderColor }}>
+                                        <p className="font-medium">{friend.username} <span className="text-xs" style={{ color: textSecondary }}>({friend.relayId})</span></p>
+                                        <button
+                                            onClick={() => setActiveChat({ type: 'PRIVATE', friendId: friend.userId })}
+                                            className="text-sm text-white px-4 py-1 rounded-full transition hover:shadow-md"
+                                            style={{ backgroundColor: ac }}
+                                        >
+                                            Start Chat
+                                        </button>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </section>
+                </div>
+            );
+        };
+        
+        // --- OTHER UTILITY COMPONENTS (Theming, Errors, etc.) ---
+
+        const ConfigErrorScreen = () => {
+            const { bgMain, textPrimary } = themeStyles;
+            return (
+                <div className="flex flex-col items-center justify-center min-h-screen p-8 text-center" style={{ backgroundColor: bgMain, color: textPrimary }}>
+                    <h2 className="text-3xl font-bold text-red-500 mb-4">Configuration Error</h2>
+                    <p className="text-lg mb-6">
+                        This app is running in a standalone environment but the 
+                        <code className="bg-red-100 text-red-700 p-1 rounded font-mono mx-1">STANDALONE_FIREBASE_CONFIG</code> 
+                        is still set to placeholders.
+                    </p>
+                    <p className="mb-8">
+                        Please open the code editor and **replace the placeholder values** in the 
+                        <code className="font-bold">STANDALONE_FIREBASE_CONFIG</code> 
+                        object with your actual Firebase project credentials.
+                    </p>
+                </div>
+            );
+        };
+
+        const LoadingScreen = () => {
+            const { bgMain, textPrimary } = themeStyles;
+            return <div className="flex justify-center items-center min-h-screen" style={{ backgroundColor: bgMain, color: textPrimary }}>Loading...</div>;
+        };
+        const BannedScreen = ({ user }) => {
+             const { bgMain } = themeStyles;
+             return <div className="flex justify-center items-center min-h-screen text-red-500 text-3xl font-bold p-4 text-center" style={{ backgroundColor: bgMain }}>ACCESS DENIED: ACCOUNT BANNED (Relay ID: {user.relayId})</div>;
+        };
+        
+        const LoginOrRegister = ({ setMainView, ac, bgMain, textPrimary, textSecondary }) => (
+              <div className="flex flex-col items-center justify-center min-h-screen p-4" style={{ backgroundColor: bgMain, color: textPrimary }}>
+                  <div className="text-center mb-8">
+                      <h1 className="text-4xl font-bold mb-2" style={{ color: ac }}>Welcome to the Relay Chat</h1>
+                      <p className="text-lg" style={{ color: textSecondary }}>Please Log In or Register to continue.</p>
+                  </div>
+                  <div className="flex space-x-4">
+                      <button
+                          onClick={() => setMainView('login')}
+                          className="px-6 py-3 text-white font-bold rounded-xl transition transform hover:scale-105 shadow-lg"
+                          style={{ backgroundColor: ac }}
+                      >
+                          Log In
+                      </button>
+                      <button
+                          onClick={() => setMainView('register')}
+                          className="px-6 py-3 text-white font-bold rounded-xl transition transform hover:scale-105 bg-gray-600 hover:bg-gray-700 shadow-lg"
+                      >
+                          Register
+                      </button>
+                  </div>
+              </div>
+        );
+
+        const LoginScreen = ({ user, dbInstance, setCompanyId, setColorScheme, setAccentColor, setMainView, setUser, ac, bgMain, bgCard, textPrimary, textSecondary, borderColor }) => {
+            const [relayId, setRelayId] = useState('');
+            const [pin, setPin] = useState('');
+            const [status, setStatus] = useState('');
+            
+            const relayIdRegex = /^[a-zA-Z0-9]{5,15}$/;
+            const pinRegex = /^\d{4,10}$/;
+
+            const handleLogin = async (e) => {
+                e.preventDefault();
+                setStatus('');
+                if (!relayIdRegex.test(relayId) || !pinRegex.test(pin)) {
+                    return setStatus('Relay ID (5-15 Alphanumeric) or PIN (4-10 Digits) format is invalid.');
+                }
+                if (!dbInstance) return setStatus('Database not ready.');
+
+                setStatus('Logging in...');
+                
+                try {
+                    const allProfilesRef = collection(dbInstance, PUBLIC_PROFILES_COLLECTION);
+                    const q = query(allProfilesRef, where('relayId', '==', relayId.toUpperCase()), where('pin', '==', pin));
+                    const querySnapshot = await getDocs(q);
+
+                    if (querySnapshot.empty) {
+                        setStatus('Login failed: Invalid Relay ID or PIN.');
+                        return;
+                    }
+
+                    const profileDoc = querySnapshot.docs[0];
+                    const profileData = profileDoc.data();
+                    
+                    const sessionProfileRef = doc(dbInstance, 'artifacts', appId, 'users', user.userId, 'user_data', 'profile');
+                    await setDoc(sessionProfileRef, profileData, { merge: true });
+
+                    setUser(profileData);
+                    setCompanyId(profileData.companyId);
+                    setColorScheme(profileData.colorScheme || 'light');
+                    setAccentColor(profileData.accentColor || '#3b82f6');
+                    
+                    if (profileData.companyId === GLOBAL_ADMIN_ID) {
+                        setMainView('verification_dashboard');
+                    } else if (profileData.role === 'Owner' || profileData.role === 'Manager') {
+                        setMainView('business_dashboard');
+                    } else {
+                        setMainView('chat');
+                    }
+
+                    setStatus('Login successful! Redirecting...');
+                } catch (error) {
+                    console.error("Login Error:", error);
+                    setStatus('An error occurred during login. Check console.');
+                }
+            };
+
+            return (
+                <div className="flex justify-center items-center min-h-screen p-4" style={{ backgroundColor: bgMain, color: textPrimary }}>
+                    <form onSubmit={handleLogin} className="w-full max-w-sm p-8 rounded-xl shadow-2xl space-y-5" style={{ backgroundColor: bgCard, border: `1px solid ${borderColor}` }}>
+                        <h2 className="text-3xl font-bold text-center mb-6" style={{ color: ac }}>Log In</h2>
+                        <input
+                            type="text"
+                            value={relayId}
+                            onChange={(e) => setRelayId(e.target.value.toUpperCase())}
+                            placeholder="Relay ID (5-15 Alphanumeric)"
+                            className="w-full p-3 border rounded-lg uppercase transition focus:ring-2"
+                            style={{ backgroundColor: bgMain, borderColor: borderColor, color: textPrimary }}
+                            required
+                            maxLength={15}
+                            minLength={5}
+                        />
+                        <input
+                            type="password"
+                            value={pin}
+                            onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} 
+                            placeholder="PIN (4-10 Digits)"
+                            className="w-full p-3 border rounded-lg transition focus:ring-2"
+                            style={{ backgroundColor: bgMain, borderColor: borderColor, color: textPrimary }}
+                            required
+                            maxLength={10}
+                            minLength={4}
+                        />
+                        <button type="submit" className="w-full py-3 text-white font-bold rounded-lg transition hover:opacity-90 shadow-md" style={{ backgroundColor: ac }}>
+                            Sign In
+                        </button>
+                        <button type="button" onClick={() => setMainView('login_or_register')} className="w-full text-sm text-center mt-2 underline hover:no-underline" style={{ color: textSecondary }}>
+                            Go Back / Register
+                        </button>
+                        {status && <p className={`text-center text-sm mt-3 p-2 rounded ${status.includes('failed') || status.includes('invalid') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{status}</p>}
+                        <p className="text-center text-xs text-yellow-500 mt-4">
+                            ⚠️ Note: PIN is stored unsafely for demo purposes. Do not use a sensitive password.
+                        </p>
+                    </form>
+                </div>
+            );
+        };
+        
+        const RegisterProfile = ({ user, dbInstance, setCompanyId, setMainView, setUser, ac, bgMain, bgCard, textPrimary, textSecondary, borderColor }) => {
+            const [username, setUsername] = useState('');
+            const [companyName, setCompanyName] = useState('');
+            const [relayId, setRelayId] = useState('');
+            const [pin, setPin] = useState('');
+            const [role, setRole] = useState('Staff');
+            const [status, setStatus] = useState('');
+
+            const relayIdRegex = /^[a-zA-Z0-9]{5,15}$/;
+            const pinRegex = /^\d{4,10}$/;
+
+            const handleProfileCreation = async (e) => {
+                e.preventDefault();
+                setStatus('');
+                
+                if (!username.trim() || !companyName.trim() || !user || !dbInstance) {
+                    return setStatus('Please fill all fields.');
+                }
+                if (!relayIdRegex.test(relayId)) {
+                    return setStatus('Error: Relay ID must be 5-15 alphanumeric characters.');
+                }
+                if (!pinRegex.test(pin)) {
+                    return setStatus('Error: PIN must be 4-10 digits.');
+                }
+
+                const profilesCol = collection(dbInstance, PUBLIC_PROFILES_COLLECTION);
+                const q = query(profilesCol, where('relayId', '==', relayId.toUpperCase()));
+                const existingUsers = await getDocs(q);
+                
+                if (!existingUsers.empty) {
+                    return setStatus('Error: That Relay ID is already taken. Please choose another.');
+                }
+                
+                const isOwner = role === 'Owner';
+                const finalCompanyId = isOwner ? uuidv4() : companyName.trim().toUpperCase().replace(/\s/g, '_');
+                
+                try {
+                    const batch = writeBatch(dbInstance);
+                    const profileRef = doc(dbInstance, 'artifacts', appId, 'users', user.userId, 'user_data', 'profile');
+                    const publicProfileRef = doc(dbInstance, PUBLIC_PROFILES_COLLECTION, user.userId);
+                    
+                    const profileData = {
+                        userId: user.userId, 
+                        relayId: relayId.toUpperCase(), 
+                        pin: pin,
+                        username: username.trim(),
+                        companyName: companyName.trim(),
+                        companyId: finalCompanyId,
+                        role: isOwner ? 'Owner' : 'Staff',
+                        language: 'en',
+                        colorScheme: 'light',
+                        accentColor: '#3b82f6',
+                        isVerified: isOwner, 
+                        createdAt: serverTimestamp(),
+                    };
+                    
+                    batch.set(profileRef, profileData);
+                    batch.set(publicProfileRef, profileData);
+                    await batch.commit();
+
+                    setUser(profileData);
+                    setCompanyId(finalCompanyId);
+                    setMainView(isOwner ? 'business_dashboard' : 'chat');
+                    setStatus('Profile created successfully! Redirecting...');
+                } catch (error) {
+                    console.error("Error creating profile:", error);
+                    setStatus('Failed to create profile. Try again.');
+                }
+            };
+            
+            return (
+                <div className="flex justify-center items-center min-h-screen p-4" style={{ backgroundColor: bgMain, color: textPrimary }}>
+                    <form onSubmit={handleProfileCreation} className="w-full max-w-md p-8 rounded-xl shadow-2xl space-y-4" style={{ backgroundColor: bgCard, border: `1px solid ${borderColor}` }}>
+                        <h2 className="text-3xl font-bold text-center mb-6" style={{ color: ac }}>New User Registration</h2>
+                        
+                        <input
+                            type="text"
+                            value={relayId}
+                            onChange={(e) => setRelayId(e.target.value.toUpperCase())}
+                            placeholder="Relay ID (5-15 Alphanumeric)"
+                            className="w-full p-3 border rounded-lg uppercase transition focus:ring-2"
+                            style={{ backgroundColor: bgMain, borderColor: borderColor, color: textPrimary }}
+                            required
+                            maxLength={15}
+                            minLength={5}
+                        />
+                        <input
+                            type="password"
+                            value={pin}
+                            onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
+                            placeholder="PIN (4-10 Digits)"
+                            className="w-full p-3 border rounded-lg transition focus:ring-2"
+                            style={{ backgroundColor: bgMain, borderColor: borderColor, color: textPrimary }}
+                            required
+                            maxLength={10}
+                            minLength={4}
+                        />
+                        
+                        <input
+                            type="text"
+                            value={username}
+                            onChange={(e) => setUsername(e.target.value)}
+                            placeholder="Your Display Name"
+                            className="w-full p-3 border rounded-lg transition focus:ring-2"
+                            style={{ backgroundColor: bgMain, borderColor: borderColor, color: textPrimary }}
+                            required
+                        />
+                        <input
+                            type="text"
+                            value={companyName}
+                            onChange={(e) => setCompanyName(e.target.value)}
+                            placeholder="Company Name"
+                            className="w-full p-3 border rounded-lg transition focus:ring-2"
+                            style={{ backgroundColor: bgMain, borderColor: borderColor, color: textPrimary }}
+                            required
+                        />
+                        <div className="relative">
+                            <select
+                                value={role}
+                                onChange={(e) => setRole(e.target.value)}
+                                className="w-full p-3 border rounded-lg appearance-none transition focus:ring-2"
+                                style={{ backgroundColor: bgMain, borderColor: borderColor, color: textPrimary }}
+                            >
+                                <option value="Staff">Staff (Employee)</option>
+                                <option value="Owner">Business Owner (First Registration)</option>
+                            </select>
+                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-700">
+                                <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
+                            </div>
+                        </div>
+
+                        <button type="submit" className="w-full py-3 text-white font-bold rounded-lg transition hover:opacity-90 shadow-md" style={{ backgroundColor: ac }}>
+                            Complete Registration
+                        </button>
+                         <button type="button" onClick={() => setMainView('login_or_register')} className="w-full text-sm text-center mt-2 underline hover:no-underline" style={{ color: textSecondary }}>
+                            Go Back / Log In
+                        </button>
+                        {status && <p className={`text-center text-sm mt-3 p-2 rounded ${status.includes('Error') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{status}</p>}
+                    </form>
+                </div>
+            );
+        };
+        
+        // --- ADMIN / BUSINESS COMPONENTS ---
+
+        const BusinessOwnerDashboard = ({ themeStyles, user, dbInstance, companyId, staffData, businessTeams }) => {
+            const { accentColor: ac, bgMain, bgCard, textPrimary, textSecondary, borderColor } = themeStyles;
+            const [teamNameInput, setTeamNameInput] = useState('');
+            const [notifMessage, setNotifMessage] = useState('');
+            const [notifTarget, setNotifTarget] = useState('ALL'); 
+            const [statusMessage, setStatusMessage] = useState('');
+
+            const canSetManager = user.role === 'Owner';
+            const staffWithoutMe = staffData.filter(staff => staff.relayId !== user.relayId);
+
+            const handleCreateTeam = async (e) => {
+                e.preventDefault();
+                if (!teamNameInput.trim() || !dbInstance) return;
+                setStatusMessage('');
+                try {
+                    const teamsCollection = collection(dbInstance, 'artifacts', appId, 'users', user.userId, 'business_data', 'teams');
+                    await addDoc(teamsCollection, {
+                        name: teamNameInput.trim(),
+                        createdAt: serverTimestamp(),
+                    });
+                    setStatusMessage(`Team "${teamNameInput.trim()}" created successfully.`);
+                    setTeamNameInput('');
+                } catch (error) {
+                    console.error("Error creating team:", error);
+                    setStatusMessage("Failed to create team.");
+                }
+            };
+
+            const handleUpdateStaffTeam = async (staffId, newTeamName) => {
+                setStatusMessage(`Updating staff team...`);
+                try {
+                    const publicProfileRef = doc(dbInstance, PUBLIC_PROFILES_COLLECTION, staffId); 
+                    const privateProfileRef = doc(dbInstance, 'artifacts', appId, 'users', staffId, 'user_data', 'profile');
+                    
+                    const batch = writeBatch(dbInstance);
+                    batch.update(publicProfileRef, { team: newTeamName || null });
+                    batch.update(privateProfileRef, { team: newTeamName || null });
+                    await batch.commit();
+                    setStatusMessage(`Staff team updated to ${newTeamName || 'None'}.`);
+                } catch (e) {
+                    console.error("Error updating team:", e);
+                    setStatusMessage("Failed to update staff team.");
+                }
+            };
+            
+            const handlePromoteDemote = async (staffId, newRole) => {
+                if (!canSetManager) return;
+                setStatusMessage(`Changing role...`);
+                try {
+                    const publicProfileRef = doc(dbInstance, PUBLIC_PROFILES_COLLECTION, staffId);
+                    const privateProfileRef = doc(dbInstance, 'artifacts', appId, 'users', staffId, 'user_data', 'profile');
+                    
+                    const batch = writeBatch(dbInstance);
+                    batch.update(publicProfileRef, { role: newRole });
+                    batch.update(privateProfileRef, { role: newRole });
+                    await batch.commit();
+                    setStatusMessage(`Staff role updated to ${newRole}.`);
+                } catch (e) {
+                    console.error("Error changing role:", e);
+                    setStatusMessage("Failed to change staff role.");
+                }
+            };
+
+            const handleSendNotification = async (e) => {
+                e.preventDefault();
+                if (!notifMessage.trim()) return;
+                setStatusMessage('Sending company notification...');
+                
+                const targetName = notifTarget === 'ALL' 
+                    ? 'All Employees' 
+                    : businessTeams.find(t => t.id === notifTarget)?.name || 'Unknown Team';
+                
+                try {
+                    const companyNotifRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'company_notifications', companyId);
+                    await setDoc(companyNotifRef, {
+                        message: notifMessage.trim(),
+                        target: targetName,
+                        targetId: notifTarget,
+                        sentBy: user.username,
+                        timestamp: serverTimestamp(),
+                    }, { merge: true });
+                    
+                    setStatusMessage(`Notification sent to ${targetName}!`);
+                    setNotifMessage('');
+                } catch (error) {
+                    console.error("Error sending notification:", error);
+                    setStatusMessage("Failed to send notification.");
+                }
+            };
+
+            return (
+                <div className="flex flex-col min-h-screen p-4 sm:p-8" style={{ backgroundColor: bgMain, color: textPrimary }}>
+                    <header className="mb-8 p-4 rounded-xl shadow-lg flex flex-col sm:flex-row justify-between items-start sm:items-center" style={{ backgroundColor: bgCard }}>
+                      <div>
+                        <h1 className="text-3xl font-extrabold" style={{ color: ac }}>{user.companyName} Dashboard</h1>
+                        <p className="text-sm" style={{ color: textSecondary }}>{user.role} View | Relay ID: {user.relayId}</p>
+                      </div>
+                      <button
+                        onClick={() => setMainView('chat')}
+                        className="mt-3 sm:mt-0 text-sm text-white px-4 py-2 rounded-full font-semibold transition transform hover:scale-105 shadow-md"
+                        style={{ backgroundColor: ac }}
+                      >
+                        Go to Chat
+                      </button>
+                    </header>
+
+                    {statusMessage && <p className={`text-center p-3 rounded-xl font-medium mb-4 ${statusMessage.includes('failed') ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>{statusMessage}</p>}
+
+                    <section className="p-6 rounded-xl shadow-xl mb-8 space-y-4" style={{ backgroundColor: bgCard, border: `1px solid ${borderColor}` }}>
+                        <h2 className="text-2xl font-semibold border-b pb-3" style={{ borderColor: borderColor }}>Company Communication</h2>
+                        <form onSubmit={handleSendNotification} className="space-y-4">
+                            <textarea
+                                value={notifMessage}
+                                onChange={(e) => setNotifMessage(e.target.value)}
+                                placeholder="Enter message (e.g., 'All hands meeting tomorrow at 10 AM')"
+                                rows="2"
+                                className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                                style={{ backgroundColor: bgMain, borderColor: borderColor, color: textPrimary }}
+                                required
+                            />
+                            <div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-3">
+                                <div className="relative flex-grow">
+                                    <select
+                                        value={notifTarget}
+                                        onChange={(e) => setNotifTarget(e.target.value)}
+                                        className="w-full p-3 border rounded-lg appearance-none"
+                                        style={{ backgroundColor: bgMain, borderColor: borderColor, color: textPrimary }}
+                                    >
+                                        <option value="ALL">Send to ALL Employees</option>
+                                        {businessTeams.map(team => (
+                                            <option key={team.id} value={team.id}>{team.name}</option>
+                                        ))}
+                                    </select>
+                                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-700">
+                                        <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
+                                    </div>
+                                </div>
+                                
+                                <button
+                                    type="submit"
+                                    className="px-4 py-3 text-white font-semibold rounded-lg hover:opacity-90 transition disabled:opacity-50 shadow-md"
+                                    style={{ backgroundColor: ac }}
+                                    disabled={!notifMessage.trim()}
+                                >
+                                    Send Notification
+                                </button>
+                            </div>
+                        </form>
+                    </section>
+                    
+                    <section className="p-6 rounded-xl shadow-xl mb-8 space-y-6" style={{ backgroundColor: bgCard, border: `1px solid ${borderColor}` }}>
+                        <h2 className="text-2xl font-semibold border-b pb-3" style={{ borderColor: borderColor }}>Team Management</h2>
+                        <form onSubmit={handleCreateTeam} className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-3">
+                            <input
+                                type="text"
+                                value={teamNameInput}
+                                onChange={(e) => setTeamNameInput(e.target.value)}
+                                placeholder="New Team Name"
+                                className="flex-grow p-3 border rounded-lg"
+                                style={{ backgroundColor: bgMain, borderColor: borderColor, color: textPrimary }}
+                                required
+                            />
+                            <button
+                                type="submit"
+                                className="px-4 py-3 text-white font-semibold rounded-lg hover:opacity-90 transition disabled:opacity-50 shadow-md"
+                                style={{ backgroundColor: ac }}
+                                disabled={!teamNameInput.trim()}
+                            >
+                                Create Team
+                            </button>
+                        </form>
+                    </section>
+                    
+                    <section className="p-6 rounded-xl shadow-xl flex-grow" style={{ backgroundColor: bgCard, border: `1px solid ${borderColor}` }}>
+                      <h2 className="text-2xl font-semibold border-b pb-3 mb-4" style={{ borderColor: borderColor }}>Staff Directory ({staffWithoutMe.length} Members)</h2>
+                      
+                      {staffWithoutMe.length === 0 ? (
+                        <p className="text-center py-4" style={{ color: textSecondary }}>No staff members have joined your business yet.</p>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="min-w-full divide-y" style={{ borderColor: borderColor }}>
+                            <thead>
+                                <tr>
+                                    <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider" style={{ color: textSecondary }}>User (Relay ID)</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider" style={{ color: textSecondary }}>Team</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider" style={{ color: textSecondary }}>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y" style={{ borderColor: borderColor }}>
+                              {staffWithoutMe.map((staff) => (
+                                <tr key={staff.userId} className="hover:bg-gray-50/10 transition">
+                                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium" style={{ color: textPrimary }}>
+                                    {staff.username} <span className="text-xs" style={{ color: textSecondary }}>({staff.relayId})</span>
+                                  </td>
+                                  <td className="px-6 py-4 whitespace-nowrap text-sm" style={{ color: textSecondary }}>
+                                    <div className="relative">
+                                        <select
+                                            value={staff.team || ''}
+                                            onChange={(e) => handleUpdateStaffTeam(staff.userId, e.target.value)}
+                                            className="p-1 border rounded text-xs appearance-none"
+                                            style={{ backgroundColor: bgMain, borderColor: borderColor, color: textPrimary }}
+                                        >
+                                            <option value="">None</option>
+                                            {businessTeams.map(team => (
+                                                <option key={team.id} value={team.name}>{team.name}</option>
+                                            ))}
+                                        </select>
+                                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-700">
+                                            <svg className="fill-current h-3 w-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
+                                        </div>
+                                    </div>
+                                  </td>
+                                  <td className="px-6 py-4 whitespace-nowrap text-sm space-x-2">
+                                    {canSetManager && staff.role !== 'Owner' && (
+                                        staff.role !== 'Manager' ? (
+                                            <button 
+                                                onClick={() => handlePromoteDemote(staff.userId, 'Manager')}
+                                                className="text-xs bg-purple-600 text-white px-3 py-1 rounded-full hover:bg-purple-700 transition shadow-sm"
+                                            >
+                                                Promote to Manager
+                                            </button>
+                                        ) : (
+                                            <button 
+                                                onClick={() => handlePromoteDemote(staff.userId, 'Staff')}
+                                                className="text-xs bg-yellow-600 text-white px-3 py-1 rounded-full hover:bg-yellow-700 transition shadow-sm"
+                                            >
+                                                Demote to Staff
+                                            </button>
+                                        )
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </section>
+                </div>
+            );
+        };
+        
+        const VerificationDashboard = ({ themeStyles, user, dbInstance, globalNotification, handleSignOut }) => {
+            const { accentColor: ac, bgMain, bgCard, textPrimary, textSecondary, borderColor } = themeStyles;
+            const [globalNotifInput, setGlobalNotifInput] = useState(globalNotification?.message || '');
+            const [statusMessage, setStatusMessage] = useState('');
+            
+            const handleSendGlobalNotification = async (e) => {
+                e.preventDefault();
+                setStatusMessage('Sending global notification...');
+                
+                try {
+                    const globalNotifRef = doc(dbInstance, GLOBAL_NOTIFICATION_DOC);
+                    
+                    if (globalNotifInput.trim()) {
+                        await setDoc(globalNotifRef, {
+                            message: globalNotifInput.trim(),
+                            sentBy: user.username,
+                            timestamp: serverTimestamp(),
+                        }, { merge: true });
+                        setStatusMessage('Global notification sent to all users!');
+                    } else {
+                         await deleteDoc(globalNotifRef);
+                         setStatusMessage('Global notification removed.');
+                    }
+                } catch (error) {
+                    console.error("Error sending global notification:", error);
+                    setStatusMessage("Failed to send global notification.");
+                }
+            };
+
+            return (
+              <div className="flex flex-col min-h-screen p-4 sm:p-8" style={{ backgroundColor: bgMain, color: textPrimary }}>
+                <header className="mb-8 p-4 rounded-xl shadow-lg flex justify-between items-center" style={{ backgroundColor: bgCard }}>
+                  <h1 className="text-3xl font-extrabold text-red-700">Admin Security Dashboard</h1>
+                  <button onClick={handleSignOut} className="text-sm text-white bg-red-600 hover:bg-red-700 px-4 py-2 rounded-full font-semibold transition shadow-md">Sign Out</button>
+                </header>
+
+                {statusMessage && <p className={`text-center p-3 rounded-xl font-medium mb-4 ${statusMessage.includes('failed') ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>{statusMessage}</p>}
+                
+                <section className="p-6 rounded-xl shadow-xl mb-8 border-4 border-yellow-500" style={{ backgroundColor: bgCard }}>
+                    <h2 className="text-2xl font-semibold border-b pb-3 mb-4" style={{ borderColor: borderColor }}>Global User Communication & Update Warnings</h2>
+                    <form onSubmit={handleSendGlobalNotification} className="space-y-4">
+                        <p className='text-sm italic' style={{ color: textSecondary }}>This message is displayed to **ALL users**. Use this to warn about upcoming updates or to ask users to back up their data.</p>
+                        <textarea
+                            value={globalNotifInput}
+                            onChange={(e) => setGlobalNotifInput(e.target.value)}
+                            placeholder="Enter global message (Leave empty to remove the current banner)."
+                            rows="3"
+                            className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-yellow-500"
+                            style={{ backgroundColor: bgMain, borderColor: borderColor, color: textPrimary }}
+                        ></textarea>
+                        <button
+                            type="submit"
+                            className="w-full py-3 text-white font-semibold rounded-lg bg-yellow-600 hover:bg-yellow-700 transition disabled:opacity-50 shadow-md"
+                        >
+                            {globalNotifInput.trim() ? 'Publish Global Message / Warning' : 'Remove Global Message'}
+                        </button>
+                    </form>
+                </section>
+                {/* Verification/Ban Logic would go here */}
+              </div>
+            );
+        };
+
+        const ThemeCustomizer = ({ ac, bgCard, textPrimary, textSecondary, borderColor, colorScheme, accentColor, handleUpdateUserTheme }) => {
+            const [isOpen, setIsOpen] = useState(false);
+            const colors = ['#3b82f6', '#ef4444', '#10b981', '#f97316', '#a855f7', '#06b6d4'];
+
+            return (
+                <div className="relative">
+                    <button 
+                        onClick={() => setIsOpen(!isOpen)}
+                        className="text-sm px-3 py-1 rounded-full font-semibold transition transform hover:scale-105 shadow-md"
+                        style={{ backgroundColor: ac, color: 'white' }}
+                    >
+                        Theme
+                    </button>
+                    {isOpen && (
+                        <div className="absolute right-0 mt-2 w-64 p-4 rounded-xl shadow-2xl z-20 space-y-3 border" style={{ backgroundColor: bgCard, borderColor: borderColor }}>
+                            <h3 className="font-semibold border-b pb-2" style={{ color: textPrimary, borderColor: borderColor }}>UI Customization</h3>
+                            <div className="space-y-1">
+                                <p className="text-sm" style={{ color: textSecondary }}>Color Scheme</p>
+                                <div className="flex space-x-2">
+                                    <button 
+                                        onClick={() => handleUpdateUserTheme('light', null)}
+                                        className={`px-3 py-1 text-sm rounded-full transition ${colorScheme === 'light' ? 'bg-gray-700 text-white shadow-inner' : 'bg-gray-100 text-gray-800 hover:bg-gray-200'}`}
+                                    >
+                                        Light
+                                    </button>
+                                    <button 
+                                        onClick={() => handleUpdateUserTheme('dark', null)}
+                                        className={`px-3 py-1 text-sm rounded-full transition ${colorScheme === 'dark' ? 'bg-white text-gray-800 shadow-inner' : 'bg-gray-700 text-white hover:bg-gray-600'}`}
+                                    >
+                                        Dark
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="space-y-1">
+                                <p className="text-sm" style={{ color: textSecondary }}>Accent Color</p>
+                                <div className="flex flex-wrap gap-2">
+                                    {colors.map(color => (
+                                        <button
+                                            key={color}
+                                            onClick={() => handleUpdateUserTheme(null, color)}
+                                            className={`w-6 h-6 rounded-full border-2 transition transform ${ac === color ? 'scale-110 shadow-lg' : 'scale-100 hover:opacity-80'}`}
+                                            style={{ backgroundColor: color, borderColor: ac === color ? textPrimary : 'transparent' }}
+                                        />
+                                    ))}
+                                </div>
+                            </div>
+                            
+                            <button onClick={() => setIsOpen(false)} className="w-full text-sm mt-3 py-1 rounded-full bg-gray-500 text-white hover:bg-gray-600">Close</button>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // --- CORE APPLICATION COMPONENT ---
+
+        const App = () => {
+            const [user, setUser] = useState(null);
+            const [authReady, setAuthReady] = useState(false);
+            const [dbInstance, setDbInstance] = useState(null);
+            const [mainView, setMainView] = useState('loading'); 
+            
+            // Communication Hub State
+            const [activeChat, setActiveChat] = useState({ type: GROUP_CHAT_ID });
+            const [groupMessages, setGroupMessages] = useState([]);
+            const [privateMessages, setPrivateMessages] = useState([]);
+            const [friendsList, setFriendsList] = useState([]);
+            const [pendingRequests, setPendingRequests] = useState([]); // NEW STATE
+            
+            // Admin/Owner States
+            const [staffData, setStaffData] = useState([]);
+            const [bannedUserIds, setBannedUserIds] = useState([]);
+            const [globalNotification, setGlobalNotification] = useState(null);
+            const [companyNotification, setCompanyNotification] = useState(null);
+            const [businessTeams, setBusinessTeams] = useState([]);
+            
+            const [companyId, setCompanyId] = useState('');
+
+            // UI Customization States
+            const [colorScheme, setColorScheme] = useState('light');
+            const [accentColor, setAccentColor] = useState('#3b82f6'); 
+            
+            const isBusinessAdmin = user && (user.role === 'Owner' || user.role === 'Manager');
+
+            // Memoize theme styles 
+            const themeStyles = useMemo(() => {
+              const isDark = colorScheme === 'dark';
+              const accentDark = accentColor;
+              
+              return {
+                accentColor: accentDark,
+                bgMain: isDark ? '#111827' : '#f9fafb', // Dark: bg-gray-900 | Light: bg-gray-50
+                bgCard: isDark ? '#1f2937' : '#ffffff', // Dark: bg-gray-800 | Light: bg-white
+                textPrimary: isDark ? '#f3f4f6' : '#1f2937', // Dark: text-gray-100 | Light: text-gray-800
+                textSecondary: isDark ? '#9ca3af' : '#6b7280', // Dark: text-gray-400 | Light: text-gray-500
+                borderColor: isDark ? '#374151' : '#e5e7eb', // Dark: border-gray-700 | Light: border-gray-200
+                isDark: isDark
+              };
+            }, [colorScheme, accentColor]);
+            
+            const { accentColor: ac, bgMain, bgCard, textPrimary, textSecondary, borderColor, isDark } = themeStyles;
+
+
+            // --- INITIALIZATION & AUTHENTICATION ---
+            useEffect(() => {
+                try {
+                  if (Object.keys(firebaseConfig).length > 0 && firebaseConfig.apiKey !== "YOUR_FIREBASE_API_KEY" && !app) {
+                    app = initializeApp(firebaseConfig);
+                    db = getFirestore(app);
+                    auth = getAuth(app);
+                    setDbInstance(db);
+
+                    const handleAuth = async () => {
+                      try {
+                        if (initialAuthToken) {
+                          await signInWithCustomToken(auth, initialAuthToken);
+                        } else {
+                          await signInAnonymously(auth);
+                        }
+                      } catch (error) {
+                        console.error("Firebase Auth Error:", error);
+                        await signInAnonymously(auth); 
+                      }
+                    };
+
+                    handleAuth();
+
+                    const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
+                      if (currentUser) {
+                        const profileRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'user_data', 'profile');
+                        const docSnap = await getDoc(profileRef);
+
+                        if (docSnap.exists()) {
+                          const profile = docSnap.data();
+                          setColorScheme(profile.colorScheme || 'light');
+                          setAccentColor(profile.accentColor || '#3b82f6');
+
+                          const isBanned = bannedUserIds.includes(profile.relayId); 
+                          if (isBanned) {
+                            setUser(profile);
+                            setMainView('banned');
+                          } else {
+                            setUser(profile);
+                            setCompanyId(profile.companyId);
+                            
+                            if (profile.companyId === GLOBAL_ADMIN_ID) {
+                              setMainView('verification_dashboard');
+                            } else if (profile.role === 'Owner' || profile.role === 'Manager') {
+                              setMainView('business_dashboard');
+                            } else {
+                              setMainView('chat');
+                            }
+                          }
+                        } else {
+                          setUser({ userId: currentUser.uid, uid: currentUser.uid, relayId: null, role: null, language: 'en', colorScheme: 'light', accentColor: '#3b82f6' });
+                          setMainView('login_or_register');
+                        }
+                      } else {
+                        setUser(null);
+                        setMainView('loading');
+                      }
+                      setAuthReady(true);
+                    });
+
+                    return () => unsubscribeAuth();
+                  } else if (Object.keys(firebaseConfig).length > 0 && firebaseConfig.apiKey === "YOUR_FIREBASE_API_KEY") {
+                      setMainView('config_error');
+                      setAuthReady(true);
+                  } else {
+                      setMainView('config_error');
+                      setAuthReady(true);
+                  }
+                } catch (e) {
+                  console.error("Initialization failed:", e);
+                  setMainView('config_error');
+                  setAuthReady(true);
+                }
+            }, [bannedUserIds]);
+
+            // --- SUBSCRIPTIONS ---
+            useEffect(() => {
+                if (!dbInstance) return;
+
+                const bannedRef = doc(dbInstance, BANNED_USERS_DOC);
+                const globalNotifRef = doc(dbInstance, GLOBAL_NOTIFICATION_DOC);
+
+                const unsubscribeBan = onSnapshot(bannedRef, (docSnap) => {
+                  const data = docSnap.exists() ? docSnap.data() : { ids: '' };
+                  const list = data.ids ? data.ids.split(',').map(id => id.trim()).filter(id => id.length > 0) : [];
+                  setBannedUserIds(list);
+                  
+                  if (user && user.relayId && list.includes(user.relayId) && mainView !== 'banned') {
+                      setMainView('banned');
+                  } 
+                }, (error) => { console.error("Error fetching banned list:", error); });
+                
+                const unsubscribeGlobalNotif = onSnapshot(globalNotifRef, (docSnap) => {
+                    setGlobalNotification(docSnap.exists() ? docSnap.data() : null);
+                }, (error) => { console.error("Error fetching global notification:", error); });
+
+                return () => { unsubscribeBan(); unsubscribeGlobalNotif(); };
+            }, [dbInstance, user, mainView]);
+            
+            useEffect(() => {
+                if (!dbInstance || !user || !user.userId || user.companyId === null) return;
+
+                let unsubscribeCompanyNotif = () => {};
+                let unsubscribeStaff = () => {};
+                let unsubscribeTeams = () => {};
+                let unsubscribeGroup = () => {};
+                let unsubscribeFriends = () => {};
+                let unsubscribeRequests = () => {}; // NEW
+                let unsubscribeVerif = () => {};
+                
+                if (user.companyId && user.companyId !== GLOBAL_ADMIN_ID) {
+                    const companyNotifRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'company_notifications', user.companyId);
+                    unsubscribeCompanyNotif = onSnapshot(companyNotifRef, (docSnap) => {
+                        setCompanyNotification(docSnap.exists() ? docSnap.data() : null);
+                    }, (error) => { console.error("Error fetching company notification:", error); });
+                    
+                    const chatsCollection = collection(dbInstance, 'artifacts', appId, 'public', 'data', 'chats');
+                    const qGroup = query(chatsCollection, where('companyId', '==', user.companyId));
+                    unsubscribeGroup = onSnapshot(qGroup, (snapshot) => {
+                      const newMessages = snapshot.docs
+                        .map(doc => ({ id: doc.id, ...doc.data() }))
+                        .sort((a, b) => (a.timestamp?.toMillis() || 0) - (b.timestamp?.toMillis() || 0));
+                      setGroupMessages(newMessages);
+                    });
+
+                    if (isBusinessAdmin) {
+                        const allStaffCollection = collection(dbInstance, PUBLIC_PROFILES_COLLECTION);
+                        const q = query(allStaffCollection, where('companyId', '==', user.companyId));
+                        unsubscribeStaff = onSnapshot(q, (snapshot) => {
+                          const staffList = snapshot.docs
+                            .map(doc => ({ id: doc.id, ...doc.data() }))
+                            .filter(profile => profile.relayId !== user.relayId); 
+                          setStaffData(staffList);
+                        }, (error) => { console.error("Error fetching staff data:", error); });
+
+                        const teamsCollection = collection(dbInstance, 'artifacts', appId, 'users', user.userId, 'business_data', 'teams');
+                        unsubscribeTeams = onSnapshot(teamsCollection, (snapshot) => {
+                            const teamsList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                            setBusinessTeams(teamsList);
+                        }, (error) => { console.error("Error fetching teams data:", error); });
+                    }
+                }
+                
+                // Friends list subscription
+                const friendsCollection = collection(dbInstance, 'artifacts', appId, 'users', user.userId, 'friends');
+                unsubscribeFriends = onSnapshot(friendsCollection, (snapshot) => {
+                  const friendsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                  setFriendsList(friendsData);
+                });
+                
+                // Incoming Friend Requests Subscription (NEW)
+                const requestsCollection = collection(dbInstance, 'artifacts', appId, 'users', user.userId, 'requests');
+                unsubscribeRequests = onSnapshot(requestsCollection, (snapshot) => {
+                  const requests = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                  setPendingRequests(requests);
+                }, (error) => { console.error("Error fetching requests:", error); });
+
+
+                if (user.companyId === GLOBAL_ADMIN_ID) {
+                    const verificationCollection = collection(dbInstance, 'artifacts', appId, 'public', 'data', 'verification_requests');
+                    const qVerif = query(verificationCollection);
+                    unsubscribeVerif = onSnapshot(qVerif, (snapshot) => {
+                        const requests = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), summary: null }));
+                        // We don't use verif in this version, but keep the listener
+                    });
+                }
+
+
+                return () => { 
+                    unsubscribeCompanyNotif(); 
+                    unsubscribeStaff(); 
+                    unsubscribeTeams(); 
+                    unsubscribeGroup();
+                    unsubscribeFriends();
+                    unsubscribeRequests(); // NEW
+                    unsubscribeVerif();
+                };
+            }, [dbInstance, user, isBusinessAdmin]);
+
+
+            // Private Chat Subscription
+            useEffect(() => {
+                if (!dbInstance || !user || activeChat.type !== 'PRIVATE' || !activeChat.friendId) {
+                  setPrivateMessages([]); 
+                  return;
+                }
+
+                const chatRoomId = getPrivateChatRoomId(user.userId, activeChat.friendId); 
+                const messagesCollection = collection(dbInstance, 'artifacts', appId, 'public', 'data', 'private_chats', chatRoomId, 'messages');
+                const q = query(messagesCollection); 
+
+                const unsubscribe = onSnapshot(q, (snapshot) => {
+                  const newMessages = snapshot.docs
+                    .map(doc => ({ id: doc.id, ...doc.data() }))
+                    .sort((a, b) => (a.timestamp?.toMillis() || 0) - (b.timestamp?.toMillis() || 0));
+                  setPrivateMessages(newMessages);
+                }, (error) => {
+                  console.error("Error fetching private messages:", error);
+                });
+
+                return () => unsubscribe();
+            }, [dbInstance, user, activeChat]);
+
+            // --- CORE HANDLERS ---
+
+            const handleSignOut = useCallback(async () => {
+                setUser(null);
+                setMainView('login_or_register');
+                // Note: We don't call firebase signOut to keep the anonymous session if no custom token was used.
+            }, []);
+            
+            const handleUpdateUserTheme = useCallback(async (scheme, accent) => {
+                if (!user || !dbInstance) return;
+
+                const newColorScheme = scheme || colorScheme;
+                const newAccentColor = accent || accentColor;
+
+                try {
+                    const profileRef = doc(dbInstance, 'artifacts', appId, 'users', user.userId, 'user_data', 'profile');
+                    await updateDoc(profileRef, {
+                        colorScheme: newColorScheme,
+                        accentColor: newAccentColor,
+                    });
+                    setColorScheme(newColorScheme);
+                    setAccentColor(newAccentColor);
+                    setUser(prev => ({ ...prev, colorScheme: newColorScheme, accentColor: newAccentColor }));
+                } catch (e) {
+                    console.error("Failed to update user theme:", e);
+                }
+            }, [user, dbInstance, colorScheme, accentColor]);
+
+            const handleSendMessage = useCallback(async (text, isPrivate = false) => {
+                if (!dbInstance || !user || !text.trim() || !user.relayId) return;
+
+                const messagePayload = {
+                    text: text.trim(),
+                    senderId: user.userId, 
+                    senderRelayId: user.relayId, 
+                    senderName: user.username,
+                    senderRole: user.role,
+                    team: user.team || null,
+                    timestamp: serverTimestamp(),
+                };
+
+                try {
+                    if (isPrivate && activeChat.friendId) {
+                        const chatRoomId = getPrivateChatRoomId(user.userId, activeChat.friendId);
+                        const messagesCollection = collection(dbInstance, 'artifacts', appId, 'public', 'data', 'private_chats', chatRoomId, 'messages');
+                        await addDoc(messagesCollection, messagePayload);
+                    } else if (!isPrivate) {
+                        messagePayload.companyId = user.companyId; 
+                        const chatsCollection = collection(dbInstance, 'artifacts', appId, 'public', 'data', 'chats');
+                        await addDoc(chatsCollection, messagePayload);
+                    }
+                } catch (error) {
+                    console.error("Error sending message:", error);
+                }
+            }, [dbInstance, user, activeChat.friendId]);
+
+            const handleDataBackup = useCallback(async () => {
+                if (!user || !dbInstance || !user.relayId) return console.warn('User not authenticated for backup.');
+
+                try {
+                    const userRef = doc(dbInstance, 'artifacts', appId, 'users', user.userId, 'user_data', 'profile');
+                    const userSnap = await getDoc(userRef);
+                    const profileData = userSnap.exists() ? userSnap.data() : {};
+
+                    const friendsCollection = collection(dbInstance, 'artifacts', appId, 'users', user.userId, 'friends');
+                    const friendSnaps = await getDocs(friendsCollection);
+                    const friends = friendSnaps.docs.map(d => d.data());
+                    
+                    const groupMsgsCollection = collection(dbInstance, 'artifacts', appId, 'public', 'data', 'chats');
+                    const qGroup = query(groupMsgsCollection, where('companyId', '==', user.companyId));
+                    const groupSnaps = await getDocs(qGroup);
+                    const groupMessagesData = groupSnaps.docs.map(d => d.data());
+                    
+                    const privateChats = [];
+                    const acceptedFriends = friends.filter(f => f.status === 'ACCEPTED');
+                    for (const friend of acceptedFriends) {
+                        const chatRoomId = getPrivateChatRoomId(user.userId, friend.userId);
+                        const privateMsgsCollection = collection(dbInstance, 'artifacts', appId, 'public', 'data', 'private_chats', chatRoomId, 'messages');
+                        const privateSnaps = await getDocs(privateMsgsCollection);
+                        
+                        privateChats.push({
+                            friendName: friend.username,
+                            friendId: friend.userId,
+                            messages: privateSnaps.docs.map(d => d.data())
+                        });
+                    }
+
+                    const backupData = {
+                        metadata: {
+                            timestamp: new Date().toISOString(),
+                            appId: appId,
+                            relayId: user.relayId,
+                            firebaseUid: user.userId,
+                            backupVersion: 2
+                        },
+                        profile: profileData,
+                        friendsList: friends,
+                        groupMessages: groupMessagesData,
+                        privateChats: privateChats
+                    };
+                    
+                    downloadJson(backupData, `chat_backup_${user.relayId}_${user.userId.substring(0, 8)}.json`);
+                    console.log('Data backup file created successfully!'); 
+                    
+                } catch (error) {
+                    console.error("Backup failed:", error);
+                }
+            }, [user, dbInstance]);
+            
+            // --- FRIENDS MANAGEMENT HANDLERS (NEW) ---
+            
+            const handleSendFriendRequest = useCallback(async (targetRelayId) => {
+                if (!dbInstance || !user || !targetRelayId || user.relayId.toUpperCase() === targetRelayId.toUpperCase()) return 'Error: Invalid target or self-request.';
+
+                try {
+                    // 1. Find the target's public profile using the Relay ID
+                    const allProfilesRef = collection(dbInstance, PUBLIC_PROFILES_COLLECTION);
+                    const q = query(allProfilesRef, where('relayId', '==', targetRelayId.toUpperCase()));
+                    const querySnapshot = await getDocs(q);
+
+                    if (querySnapshot.empty) {
+                        return 'Error: User with that Relay ID not found.';
+                    }
+
+                    const targetProfile = querySnapshot.docs[0].data();
+                    const targetUserId = targetProfile.userId; 
+
+                    const isAlreadyFriend = friendsList.some(f => f.userId === targetUserId && f.status === 'ACCEPTED');
+                    if (isAlreadyFriend) return 'Error: You are already friends with this user.';
+                    
+                    // 2. Check if request already exists
+                    const targetRequestsCollection = collection(dbInstance, 'artifacts', appId, 'users', targetUserId, 'requests');
+                    const existingRequestDoc = await getDoc(doc(targetRequestsCollection, user.userId));
+
+                    if (existingRequestDoc.exists()) {
+                         return 'Error: Request already sent or pending from this user.';
+                    }
+
+                    // 3. Write the request document to the target's 'requests' subcollection
+                    await setDoc(doc(targetRequestsCollection, user.userId), {
+                        senderId: user.userId, 
+                        senderRelayId: user.relayId,
+                        senderName: user.username,
+                        timestamp: serverTimestamp(),
+                        status: 'PENDING'
+                    });
+
+                    return 'Success: Friend request sent!';
+
+                } catch (error) {
+                    console.error("Error sending friend request:", error);
+                    return 'An error occurred while sending the request.';
+                }
+            }, [dbInstance, user, friendsList]); 
+
+            const handleAcceptFriend = useCallback(async (request) => {
+                if (!dbInstance || !user) return 'Not authenticated.';
+
+                try {
+                    const batch = writeBatch(dbInstance);
+                    const senderId = request.senderId;
+
+                    // 1. Current user (receiver) adds sender to their friends list
+                    const myFriendRef = doc(dbInstance, 'artifacts', appId, 'users', user.userId, 'friends', senderId);
+                    batch.set(myFriendRef, { 
+                        userId: senderId, 
+                        relayId: request.senderRelayId,
+                        username: request.senderName, 
+                        status: 'ACCEPTED',
+                        startedAt: serverTimestamp()
+                    });
+
+                    // 2. Sender (requester) adds receiver (current user) to their friends list
+                    const senderFriendRef = doc(dbInstance, 'artifacts', appId, 'users', senderId, 'friends', user.userId);
+                    batch.set(senderFriendRef, {
+                        userId: user.userId,
+                        relayId: user.relayId,
+                        username: user.username,
+                        status: 'ACCEPTED',
+                        startedAt: serverTimestamp()
+                    });
+
+                    // 3. Delete the request document
+                    const requestDocRef = doc(dbInstance, 'artifacts', appId, 'users', user.userId, 'requests', request.senderId);
+                    batch.delete(requestDocRef);
+
+                    await batch.commit();
+                    return 'Success: Friend request accepted!';
+
+                } catch (error) {
+                    console.error("Error accepting friend request:", error);
+                    return 'An error occurred while accepting the request.';
+                }
+            }, [dbInstance, user]);
+
+            const handleDeclineFriend = useCallback(async (request) => {
+                if (!dbInstance || !user) return 'Not authenticated.';
+
+                try {
+                    // Just delete the request document
+                    const requestDocRef = doc(dbInstance, 'artifacts', appId, 'users', user.userId, 'requests', request.senderId);
+                    await deleteDoc(requestDocRef);
+                    return 'Success: Friend request declined.';
+                } catch (error) {
+                    console.error("Error declining friend request:", error);
+                    return 'An error occurred while declining the request.';
+                }
+            }, [dbInstance, user]);
+            
+            // --- MAIN COMMUNICATION HUB ---
+
+            const MainCommunicationHub = () => {
+                const isGroupChat = activeChat.type === GROUP_CHAT_ID;
+                const isPrivateChat = activeChat.type === 'PRIVATE';
+                const currentMessages = isGroupChat ? groupMessages : privateMessages;
+                
+                let chatTitle = isGroupChat 
+                    ? `${user.companyName} Chat`
+                    : isPrivateChat 
+                        ? `Private Chat with ${friendsList.find(f => f.userId === activeChat.friendId && f.status === 'ACCEPTED')?.username || 'Loading...'}`
+                        : "Friends Management";
+
+                return (
+                    <div className="flex flex-col h-screen" style={{ backgroundColor: bgCard, color: textPrimary }}>
+                        
+                        {/* Global Notification Banner */}
+                        {globalNotification?.message && (
+                            <div className="p-2 text-center text-sm font-medium" style={{ backgroundColor: '#fcd34d', color: '#b45309' }}>
+                                ⚠️ <strong>GLOBAL WARNING:</strong> {globalNotification.message}
+                            </div>
+                        )}
+                        
+                        {/* Company Notification Banner */}
+                        {companyNotification?.message && (
+                            <div className="p-2 text-center text-sm font-medium" style={{ backgroundColor: '#bfdbfe', color: '#1e40af' }}>
+                                📢 <strong>COMPANY NOTICE:</strong> {companyNotification.message}
+                            </div>
+                        )}
+
+                        {/* Header */}
+                        <header className="p-4 border-b shadow-md flex flex-col sm:flex-row justify-between items-start sm:items-center" style={{ backgroundColor: bgCard, borderColor: borderColor }}>
+                            <div className="flex flex-col sm:flex-row sm:items-center mb-2 sm:mb-0">
+                                <h1 className="text-xl font-bold flex items-center" style={{ color: ac }}>
+                                    {chatTitle}
+                                </h1>
+                                <p className="text-xs sm:ml-4 mt-1 sm:mt-0 p-1 rounded-md" style={{ color: textSecondary, backgroundColor: bgMain }}>Relay ID: {user.relayId}</p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                <ThemeCustomizer 
+                                    ac={ac} 
+                                    bgCard={bgCard} 
+                                    textPrimary={textPrimary} 
+                                    textSecondary={textSecondary} 
+                                    borderColor={borderColor} 
+                                    colorScheme={colorScheme} 
+                                    accentColor={accentColor} 
+                                    handleUpdateUserTheme={handleUpdateUserTheme}
+                                />
+                                
+                                <button
+                                    onClick={handleDataBackup}
+                                    className="text-sm px-3 py-1 rounded-full font-semibold transition hover:opacity-90 shadow-md"
+                                    style={{ backgroundColor: ac, color: 'white' }}
+                                >
+                                    Backup Data
+                                </button>
+                                
+                                <button
+                                    onClick={() => setActiveChat({ type: activeChat.type === 'FRIENDS_MANAGER' ? GROUP_CHAT_ID : 'FRIENDS_MANAGER' })}
+                                    className="text-sm px-3 py-1 rounded-full font-semibold transition shadow-md"
+                                    style={{ backgroundColor: activeChat.type === 'FRIENDS_MANAGER' ? ac : bgMain, color: activeChat.type === 'FRIENDS_MANAGER' ? 'white' : textPrimary }}
+                                >
+                                    {activeChat.type === 'FRIENDS_MANAGER' ? 'Group Chat' : 'Friends'}
+                                </button>
+                                <button
+                                    onClick={handleSignOut}
+                                    className="text-sm px-3 py-1 rounded-full font-semibold transition bg-red-500 text-white hover:bg-red-600 shadow-md"
+                                >
+                                    Log Out
+                                </button>
+                            </div>
+                        </header>
+
+                        {/* Main Content Area */}
+                        <div className="flex-grow overflow-hidden">
+                            {activeChat.type === 'FRIENDS_MANAGER' ? (
+                                <FriendsManager
+                                    themeStyles={themeStyles}
+                                    friendsList={friendsList}
+                                    pendingRequests={pendingRequests}
+                                    handleAcceptFriend={handleAcceptFriend}
+                                    handleDeclineFriend={handleDeclineFriend}
+                                    handleSendFriendRequest={handleSendFriendRequest}
+                                    setActiveChat={setActiveChat}
+                                /> 
+                            ) : (
+                                <div className='flex flex-col h-full'>
+                                    <ChatContent 
+                                        messages={currentMessages} 
+                                        isPrivate={isPrivateChat}
+                                        user={user}
+                                        isDark={isDark}
+                                        accentColor={ac}
+                                        bgMainColor={bgMain}
+                                        textSecondaryColor={textSecondary}
+                                    />
+                                    <MessageInput 
+                                        onSend={handleSendMessage}
+                                        currentChatType={activeChat.type}
+                                        activeChat={activeChat}
+                                        accentColor={ac}
+                                        bgCardColor={bgCard}
+                                        borderColor={borderColor}
+                                        bgMainColor={bgMain}
+                                        textColor={textPrimary}
+                                    />
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            }
+
+            // --- RENDER MAIN APP ---
+
+            if (mainView === 'config_error') { return <ConfigErrorScreen themeStyles={themeStyles} />; }
+            if (!authReady || mainView === 'loading') { return <LoadingScreen themeStyles={themeStyles} />; }
+            if (mainView === 'banned') { return <BannedScreen user={user} themeStyles={themeStyles} />; }
+            
+            if (mainView === 'login_or_register') { return <LoginOrRegister setMainView={setMainView} ac={ac} bgMain={bgMain} textPrimary={textPrimary} textSecondary={textSecondary} />; }
+            if (mainView === 'login') { return <LoginScreen user={user} dbInstance={dbInstance} setCompanyId={setCompanyId} setColorScheme={setColorScheme} setAccentColor={setAccentColor} setMainView={setMainView} setUser={setUser} ac={ac} bgMain={bgMain} bgCard={bgCard} textPrimary={textPrimary} textSecondary={textSecondary} borderColor={borderColor} />; }
+            if (mainView === 'register') { return <RegisterProfile user={user} dbInstance={dbInstance} setCompanyId={setCompanyId} setMainView={setMainView} setUser={setUser} ac={ac} bgMain={bgMain} bgCard={bgCard} textPrimary={textPrimary} textSecondary={textSecondary} borderColor={borderColor} />; }
+
+            if (mainView === 'business_dashboard' && isBusinessAdmin) { 
+              return <BusinessOwnerDashboard 
+                  themeStyles={themeStyles} 
+                  user={user} 
+                  dbInstance={dbInstance} 
+                  companyId={companyId}
+                  staffData={staffData}
+                  businessTeams={businessTeams}
+              />; 
+            }
+            if (mainView === 'verification_dashboard' && user && user.companyId === GLOBAL_ADMIN_ID) { 
+              return <VerificationDashboard 
+                  themeStyles={themeStyles} 
+                  user={user} 
+                  dbInstance={dbInstance} 
+                  globalNotification={globalNotification}
+                  handleSignOut={handleSignOut}
+              />; 
+            }
+            if (mainView === 'chat' && user) { return <MainCommunicationHub />; }
+
+            return (
+              <div className="flex flex-col items-center justify-center min-h-screen p-4" style={{ backgroundColor: bgMain, color: textPrimary }}>
+                <h2 className="text-xl font-bold text-red-600">Error: Access Denied or Profile Loading</h2>
+                <p className="text-sm text-center" style={{ color: textSecondary }}>Please try logging in again.</p>
+                <button onClick={handleSignOut} className="mt-4 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600">Log Out</button>
+              </div>
+            );
+        };
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+
+    </script>
+</body>
+</html>
+
